@@ -57,9 +57,9 @@ run_question_tagger <- function(
     limit_n = Inf,
     sample_size = 5,
     progress_path = "question_tagger_state.rds",
-    embed_model = EMBED_MODEL,
-    tag_model = TAGGER_MODEL,
-    base = OLLAMA_BASE
+    embed_model = ollama_config()$embed_model,
+    tag_model = ollama_config()$tagger_model,
+    base_url = ollama_config()$base_url
 ) {
   if (file.exists(progress_path)) {
     message("Resuming tagging from existing progress file: ", progress_path)
@@ -74,7 +74,7 @@ run_question_tagger <- function(
       clusters_by_level = clusters_by_level,
       limit_n = limit_n,
       embed_model = embed_model,
-      base = base
+      base_url = base_url
     )
 
     # hierarchy$questions is your embedded questions dataframe (step 2)
@@ -87,18 +87,20 @@ run_question_tagger <- function(
       clusters = clusters,
       clusters_by_level = clusters_by_level
     )
-    saveRDS(state, progress_path)
+    save_tag_state(structure(state, class = "tag_state"), progress_path)
     message("Initial state saved to: ", progress_path)
   }
 
-  state$clusters <- tag_clusters_bottom_up(
-    clusters = state$clusters,
-    questions = state$questions,
-    assignments = state$assignments,
+  if (!inherits(state, "tag_state")) {
+    state <- structure(state, class = "tag_state")
+  }
+
+  state <- tag_clusters_bottom_up(
+    state = state,
     sample_size = sample_size,
     progress_path = progress_path,
     model = tag_model,
-    base = base
+    base_url = base_url
   )
 
   # Returned list:
@@ -129,13 +131,14 @@ run_question_tagger <- function(
 #' @return The clusters tibble with the \code{tag} column filled.
 #' @keywords internal
 tag_clusters_bottom_up <- function(
-    clusters,
-    questions,
-    assignments,
+    state,
     sample_size,
     progress_path,
     model,
-    base) {
+    base_url) {
+  clusters <- state$clusters
+  questions <- state$questions
+  assignments <- state$assignments
 
   max_level <- max(clusters$level)
 
@@ -177,7 +180,7 @@ tag_clusters_bottom_up <- function(
           captions = examples,
           cluster_id = cluster_row$cluster_id,
           model = model,
-          base = base
+          base_url = base_url
         )
       } else {
         # Parent levels: roll up from children
@@ -204,7 +207,7 @@ tag_clusters_bottom_up <- function(
           parent_examples = examples,
           cluster_id = cluster_row$cluster_id,
           model = model,
-          base = base
+          base_url = base_url
         )
       }
 
@@ -220,12 +223,8 @@ tag_clusters_bottom_up <- function(
       ] <- final_tag
 
       # Persist full state after each cluster (your resume requirement)
-      state <- list(
-        questions = questions,
-        assignments = assignments,
-        clusters = clusters
-      )
-      saveRDS(state, progress_path)
+      state$clusters <- clusters
+      save_tag_state(state, progress_path)
       message(
         "Saved progress after level ", level_idx,
         ", cluster ", cluster_row$cluster_id,
@@ -244,7 +243,7 @@ tag_clusters_bottom_up <- function(
     }
   }
 
-  clusters
+  state
 }
 
 #' Tag a parent cluster based on its child tags and sample questions
@@ -260,11 +259,11 @@ tag_parent_cluster <- function(
     child_clusters,
     parent_examples,
     cluster_id,
-    model = TAGGER_MODEL,
-    base = OLLAMA_BASE) {
+    model,
+    base_url) {
 
   child_lines <- purrr::map_chr(child_clusters, function(child) {
-    tag <- child$tag %||% "untagged"
+    tag <- rlang::`%||%`(child$tag, "untagged")
     samples <- paste(child$samples, collapse = " | ")
     paste0("- child cluster ", child$cluster_id,
            " (tag: ", tag, "): ", samples)
@@ -302,40 +301,19 @@ tag_parent_cluster <- function(
   message("tag_parent_cluster() – parent cluster ", cluster_id)
   message("Prompt:\n", prompt)
 
-  req <- httr2::request(paste0(base, "/api/generate")) |>
-    httr2::req_body_json(list(
-      model  = model,
+  raw <- tryCatch(
+    ollama_generate(
       prompt = prompt,
-      stream = FALSE,
-      options = list(temperature = 0.1, num_predict = 10)
-    )) |>
-    httr2::req_timeout(180)
-
-  resp <- tryCatch(httr2::req_perform(req), error = function(e) e)
-  if (inherits(resp, "error")) {
-    message("Error calling Ollama (parent): ", conditionMessage(resp))
-    return("untagged")
-  }
-
-  j <- tryCatch(httr2::resp_body_json(resp, simplifyVector = TRUE),
-                error = function(e) e)
-  if (inherits(j, "error")) {
-    message("Error parsing JSON (parent): ", conditionMessage(j))
-    return("untagged")
-  }
-
-  raw <- tryCatch({
-    if (!is.null(j$response)) {
-      j$response
-    } else if (!is.null(j$message$content)) {
-      j$message$content
-    } else if (!is.null(j$choices) && length(j$choices) > 0 &&
-               !is.null(j$choices[[1]]$message$content)) {
-      j$choices[[1]]$message$content
-    } else {
+      model = model,
+      base_url = base_url,
+      temperature = 0.1,
+      num_predict = 10
+    ),
+    error = function(e) {
+      message("Error calling Ollama (parent): ", conditionMessage(e))
       NA_character_
     }
-  }, error = function(e) NA_character_)
+  )
 
   message("Raw parent model output: ", raw)
 
@@ -349,3 +327,193 @@ tag_parent_cluster <- function(
   lab
 }
 
+#' Tag a single cluster using Ollama
+#'
+#' @param captions Character vector of sample questions.
+#' @param cluster_id Cluster identifier.
+#' @param model Ollama model to use.
+#' @param base_url Base URL for the Ollama server.
+#'
+#' @return A short tag label.
+#' @keywords internal
+tag_one_cluster_ollama <- function(
+    captions,
+    cluster_id,
+    model,
+    base_url
+) {
+  examples <- paste0("- ", captions, collapse = "\n")
+  prompt <- paste(
+    "You are labeling a cluster of survey questions.",
+    "",
+    "OUTPUT FORMAT:",
+    "- Output ONE SHORT LABEL (exactly one word), lowercase, ASCII letters only.",
+    "- No punctuation, no spaces, no quotes.",
+    "- No explanation.",
+    "",
+    "Cluster id:", cluster_id,
+    "",
+    "Example questions:",
+    examples,
+    sep = "\n"
+  )
+
+  raw <- tryCatch(
+    ollama_generate(
+      prompt = prompt,
+      model = model,
+      base_url = base_url,
+      temperature = 0.2,
+      num_predict = 10
+    ),
+    error = function(e) {
+      message("Error calling Ollama (leaf): ", conditionMessage(e))
+      NA_character_
+    }
+  )
+
+  label <- sanitize_label(raw)
+  if (is.null(label) || is.na(label) || nchar(label) < 2L) {
+    "untagged"
+  } else {
+    label
+  }
+}
+
+#' Sanitize a raw label into a single word
+#'
+#' @param raw Raw label from the model.
+#'
+#' @return Sanitized label.
+#' @keywords internal
+sanitize_label <- function(raw) {
+  if (is.null(raw) || is.na(raw)) {
+    return(NA_character_)
+  }
+  cleaned <- stringr::str_squish(tolower(raw))
+  stringr::str_extract(cleaned, "^[a-z]+")
+}
+
+#' Build a question tag matrix from cluster tags
+#'
+#' @param assignments Question-to-cluster assignments.
+#' @param clusters Cluster tags with level and cluster_id.
+#'
+#' @return Tag matrix with tag_level_* columns.
+#' @export
+build_question_tag_matrix <- function(assignments, clusters) {
+  tag_lookup <- clusters |>
+    dplyr::select(level, cluster_id, tag)
+
+  assignments |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("cluster_level_"),
+      names_to = "level_name",
+      values_to = "cluster_id"
+    ) |>
+    dplyr::mutate(
+      level = as.integer(stringr::str_remove(level_name, "cluster_level_"))
+    ) |>
+    dplyr::left_join(tag_lookup, by = c("level", "cluster_id")) |>
+    dplyr::select(id, caption, level, tag) |>
+    dplyr::mutate(level_name = paste0("tag_level_", level)) |>
+    dplyr::select(-level) |>
+    dplyr::distinct() |>
+    tidyr::pivot_wider(
+      names_from = level_name,
+      values_from = tag
+    ) |>
+    dplyr::arrange(id)
+}
+
+#' Run the full tagging pipeline with resumable state
+#'
+#' @param forms_path Path to the forms.Rda file.
+#' @param clusters_by_level Integer vector of cluster counts by level.
+#' @param limit_n Maximum number of unique questions to include.
+#' @param sample_size Number of sample questions per cluster for tagging.
+#' @param progress_path File path to persist state.
+#' @param config List from [ollama_config()].
+#' @param clean_levels Levels to pass to [clean_tag_hierarchy()].
+#' @param use_llm_cleaning Logical, whether to use LLM cleanup.
+#'
+#' @return A `tag_state` object with all pipeline outputs.
+#' @export
+run_tagger_pipeline <- function(
+    forms_path,
+    clusters_by_level,
+    limit_n = Inf,
+    sample_size = 5,
+    progress_path = "question_tagger_state.rds",
+    config = ollama_config(),
+    clean_levels = 1:6,
+    use_llm_cleaning = FALSE
+) {
+  if (file.exists(progress_path)) {
+    state <- load_tag_state(progress_path)
+    if (!inherits(state, "tag_state")) {
+      state <- structure(state, class = "tag_state")
+    }
+  } else {
+    forms <- load_forms(forms_path)
+    questions <- unnest_questions(forms, limit_n = limit_n)
+    state <- new_tag_state(questions)
+    save_tag_state(state, progress_path)
+  }
+
+  if (is.null(state$embeddings)) {
+    embeddings <- embed_multiple_questions(
+      texts = state$questions$caption,
+      model = config$embed_model,
+      base_url = config$base_url
+    )
+    state$questions$embedding <- embeddings
+    state$embeddings <- do.call(rbind, embeddings)
+    save_tag_state(state, progress_path)
+  }
+
+  if (is.null(state$hclust) || is.null(state$assignments) || is.null(state$clusters)) {
+    clustering <- cluster_embeddings(state$embeddings, clusters_by_level)
+    assignments <- add_cluster_assignments(state$questions, clustering$hclust, clusters_by_level)
+    clusters <- build_cluster_index(assignments, clusters_by_level)
+    state$hclust <- clustering$hclust
+    state$assignments <- assignments
+    state$clusters <- clusters
+    save_tag_state(state, progress_path)
+  }
+
+  if (any(is.na(state$clusters$tag)) || any(state$clusters$tag == "untagged")) {
+    state <- tag_clusters_bottom_up(
+      state = state,
+      sample_size = sample_size,
+      progress_path = progress_path,
+      model = config$tagger_model,
+      base_url = config$base_url
+    )
+  }
+
+  if (is.null(state$tag_matrix)) {
+    state$tag_matrix <- build_question_tag_matrix(state$assignments, state$clusters)
+    save_tag_state(state, progress_path)
+  }
+
+  if (is.null(state$cleaned)) {
+    cleaned <- clean_tag_hierarchy(
+      state$tag_matrix,
+      levels = clean_levels,
+      model = config$tagger_model,
+      base_url = config$base_url,
+      use_llm = use_llm_cleaning
+    )
+    state$tag_matrix <- cleaned$cleaned_matrix
+    state$cleaned <- cleaned$mapping
+    save_tag_state(state, progress_path)
+  }
+
+  if (is.null(state$audit)) {
+    state <- audit_tag_paths(state, allow_manual = FALSE)
+    save_tag_state(state, progress_path)
+  }
+
+  state
+}

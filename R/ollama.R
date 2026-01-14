@@ -6,86 +6,120 @@
 # requests to running ollama models and parses responses or errors accordingly.
 
 
+#' Send a request to an Ollama server.
+#'
+#' @description
+#' This generic helper wraps a request body as JSON and sends it to the
+#' specified Ollama endpoint.
+#'
+#' @param base_url Base URL for the Ollama server.
+#' @param endpoint Endpoint path, e.g. \code{"/api/generate"}.
+#' @param body Request body that will be encoded as JSON.
+#' @param timeout_sec Request timeout in seconds.
+#'
+#' @return An httr2 response object.
+#'
+#' @importFrom httr2 request
+#' @importFrom httr2 req_body_json
+#' @importFrom httr2 req_perform
+#' @importFrom httr2 req_timeout
+#'
+#' @export
+ollama_request <- function(base_url, endpoint, body, timeout_sec = 60) {
+  httr2::request(paste0(base_url, endpoint)) |>
+    httr2::req_body_json(body) |>
+    httr2::req_timeout(timeout_sec) |>
+    httr2::req_perform()
+}
+
+#' Send a prompt to an Ollama model.
+#'
+#' @description
+#' Generic prompt helper that accepts runtime parameters and returns the text
+#' response for tagging or other generation tasks.
+#'
+#' @param prompt The user prompt to send to the model.
+#' @param model Name of the Ollama model to use.
+#' @param base_url Base URL for the Ollama server.
+#' @param num_predict Maximum number of tokens to generate.
+#' @param temperature Controls the randomness/creativity of the output.
+#' @param format Optional response format passed to Ollama.
+#' @param timeout_sec Request timeout in seconds.
+#'
+#' @return Character response content.
+#'
+#' @importFrom httr2 resp_body_json
+#'
+#' @export
+ollama_generate <- function(
+    prompt,
+    model,
+    base_url,
+    num_predict = 64,
+    temperature = 0.2,
+    format = NULL,
+    timeout_sec = 180
+) {
+  body <- list(
+    model = model,
+    prompt = prompt,
+    stream = FALSE,
+    options = list(
+      num_predict = num_predict,
+      temperature = temperature
+    )
+  )
+  if (!is.null(format)) {
+    body$format <- format
+  }
+
+  resp <- ollama_request(base_url, "/api/generate", body, timeout_sec = timeout_sec)
+  parsed <- httr2::resp_body_json(resp, simplifyVector = TRUE)
+  response <- rlang::`%||%`(parsed$response, parsed$message$content)
+  rlang::`%||%`(response, "")
+}
+
+#' Embed a string using an Ollama embedding model.
+#'
+#' @param text Text to embed.
+#' @param model Embedding model name.
+#' @param base_url Base URL for the Ollama server.
+#' @param timeout_sec Request timeout in seconds.
+#'
+#' @return Numeric embedding vector.
+#'
+#' @export
+ollama_embed <- function(text, model, base_url, timeout_sec = 60) {
+  resp <- ollama_request(
+    base_url,
+    "/api/embeddings",
+    list(model = model, prompt = text),
+    timeout_sec = timeout_sec
+  )
+  parsed <- httr2::resp_body_json(resp, simplifyVector = TRUE)
+  as.numeric(parsed$embedding)
+}
+
 #' Test Ollama connection
 #'
 #' @description
 #' Before running the tagging pipeline configure and test the Ollama connection
-#' to ensure the necessary models are running and reachable. A test prompt is sent
-#' to each of the running models to ensure a connection can be established.
+#' to ensure the necessary models are running and reachable.
 #'
-#' @param ollama_url Base url where the ollama instance is running.
+#' @param base_url Base url where the Ollama instance is running.
 #' @param model_name Desired model to use for embedding/tagging.
 #'
 #' @returns TRUE on connection success.
 #'
-#' @importFrom httr http_status
-#' @importFrom jsonlite fromJSON
-#'
 #' @export
-test_connection <- function(ollama_url, model_name) {
-
-  prompt_text <- "Explain the concept of quantum entanglement in simple terms."
-
-  request_body <- list(
+test_connection <- function(base_url, model_name) {
+  prompt_text <- "Return the word ok."
+  response <- ollama_generate(
+    prompt = prompt_text,
     model = model_name,
-    prompt = prompt_text
+    base_url = base_url,
+    num_predict = 3,
+    temperature = 0
   )
-
-  if (http_status(response)$category == "Success") {
-
-    response_content <- content(response, "text", encoding = "UTF-8")
-    parsed_response <- fromJSON(response_content)
-
-    cat("Ollama Response:\n")
-    if (!is.null(parsed_response$response)) {
-      cat(parsed_response$response, "\n")
-    } else {
-      print(parsed_response) # Print the whole structure if 'response' isn't found
-    }
-  } else {
-    cat("Error sending request to Ollama:\n")
-    print(http_status(response))
-    cat(content(response, "text", encoding = "UTF-8"), "\n")
-  }
-}
-
-
-#' Send a request to an Ollama server.
-#'
-#' @description
-#' This generic function wraps a user prompt as a http request before sending it
-#' to an active Ollama server. The LLM response is parsed, interpreted and returned
-#' if the request was successful; an appropriate error message is returned upon
-#' failure.
-#'
-#' @param prompt The user prompt to send to the model.
-#' @param num_predict Maximum number of tokens the language model will generate for its response.
-#' @param temperature Controls the randomness/creativity of the output (low temperatures make responses more predictable)
-#'
-#' @importFrom httr request
-#' @importFrom httr req_error
-#' @importFrom httr req_perform
-#' @importFrom jsonlite resp_body_json
-#'
-#' @export
-ollama_generate <- function(prompt, num_predict = 3, temperature = 0.2) {
-
-  req <- request(paste0(base, "/api/generate")) |>
-    req_body_json(list(
-      model  = model,
-      prompt = prompt,
-      stream = FALSE,
-      options = list(num_predict = num_predict, temperature = temperature)
-    )) |>
-    req_error(is_error = function(resp) FALSE)
-
-
-  # TODO:  Handle error responses gracefully
-  resp <- req_perform(req)
-  if (resp_status(resp) == 200) {
-    raw <- resp_body_json(resp)$response
-    cand <- str_extract(tolower(str_squish(raw)), "^[a-z]+(?: [a-z]+)?")
-    if (!is.na(cand) && nzchar(cand)) return(cand)
-  }
-  "untagged"
+  nzchar(response)
 }

@@ -6,7 +6,8 @@ GraphDB provides helpers to:
 
 - import survey data from CSV files and normalise survey identifiers,
 - embed and cluster question captions using local Ollama models, and
-- export survey content to JSON-LD aligned to the [Survey Ontology](https://w3id.org/survey-ontology).
+- export survey content to JSON-LD aligned to the [Survey Ontology](https://w3id.org/survey-ontology),
+- tag survey questions with a resumable, functional pipeline.
 
 
 
@@ -31,7 +32,43 @@ conf <- ollama_config()
 # This configures the parameters to their default values or the environment variables (if set)
 
 # Alternatively override any parameters in the function call aas follows
-conf <- ollama_config(base_url = http://localhost:11434)
+conf <- ollama_config(base_url = "http://localhost:11434")
+```
+
+### Functional pipeline
+
+The tagging pipeline is designed as a sequence of small, reusable functions
+that can be resumed from disk. The full pipeline is wrapped by
+`run_tagger_pipeline()`, but each step is also exposed for manual execution.
+
+Major functions and what they do:
+
+- `ollama_config()`: collect Ollama base URL and model names.
+- `load_forms()`: read a `.Rda` forms tibble from disk.
+- `unnest_questions()`: extract unique question captions.
+- `embed_multiple_questions()`: call the Ollama embedder for all captions.
+- `cluster_embeddings()` + `add_cluster_assignments()`: build hierarchical
+  clusters from embeddings.
+- `build_cluster_index()`: index clusters and parent/child relationships.
+- `tag_clusters_bottom_up()`: tag clusters, saving state after each tag.
+- `build_question_tag_matrix()`: map tags to each question across levels.
+- `clean_tag_hierarchy()` + `audit_tag_paths()`: clean tag hierarchy and flag
+  redundant/missing tags.
+
+Example end-to-end run:
+
+```r
+conf <- ollama_config()
+state <- run_tagger_pipeline(
+  forms_path = "path/to/forms.Rda",
+  clusters_by_level = binary_levels(128),
+  progress_path = "tagger_state.rds",
+  config = conf,
+  use_llm_cleaning = FALSE
+)
+
+state$tag_matrix
+state$audit
 ```
 
 ### Embeddings
@@ -48,16 +85,17 @@ As a preliminary step the R data frame (containing the survey data) needs to be 
 so the question captions can be sent to the embedder.
 ```
 forms_path <- "...pathTo/form.Rda"
-load(forms_path)
-
-forms_flat <- form %>%
-  unnest(form) %>%
-  filter(!is.na(caption), nzchar(caption))
+forms <- load_forms(forms_path)
+forms_flat <- unnest_questions(forms)
 ```
 
 Once flattened the question captions are sent to the embedding model:
 ```
-embeddings <- embed_multiple_questions(forms_flat, model = EMBED_MODEL, base = OLLAMA_BASE)
+embeddings <- embed_multiple_questions(
+  forms_flat$caption,
+  model = conf$embed_model,
+  base_url = conf$base_url
+)
 ```
 
 ### Clustering
@@ -86,7 +124,7 @@ dividing a large cluster into smaller ones (divisive). This results in a tree-li
 3. Run the forms tagging demonstration once you have `forms.Rda` available:
 
    ```r
-   source("Vignettes/formsDemo.R")
+   source("Vignettes/taggerDemo.R")
    ```
 
 ## Question tagging with Ollama
@@ -99,5 +137,3 @@ ollama serve
 ollama pull llama3.1:8b
 ollama pull nomic-embed-text
 ```
-
-
