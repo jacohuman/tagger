@@ -8,7 +8,8 @@ new_tag_state <- function(questions) {
       questions  = questions,        # tibble: id, caption
       embeddings = NULL,             # matrix
       hclust     = NULL,             # hclust object
-      clusters   = NULL,             # tibble: id, level, cluster_id
+      assignments = NULL,            # tibble: question + cluster_level_* columns
+      clusters   = NULL,             # tibble: level, cluster_id, parent_cluster, tag
       tags       = NULL,             # tibble: level, cluster_id, tag
       tag_matrix = NULL,             # tibble: id, tag_level_1...tag_level_n
       cleaned    = NULL,             # vocab cleanup info
@@ -33,5 +34,6 @@ save_tag_state <- function(state, path) {
 #' @param path Path from where the tag_state should be read
 #'
 #' @export
-load_tag_state <- function(path)
+load_tag_state <- function(path) {
   readRDS(path)
+}

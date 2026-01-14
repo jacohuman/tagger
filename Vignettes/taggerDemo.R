@@ -1,115 +1,84 @@
 # Demonstration: tagging questions from forms.Rda
 #
-# This script runs the full hierarchical tagging pipeline for 100 survey
-# questions. It explicitly follows the requested steps: unnest forms.Rda,
-# embed each caption with the Ollama embedding model, cluster at a configurable
-# level k, tag from the deepest clusters upward, and roll up tags while keeping
-# progress in case the run aborts.
+# This script runs the full hierarchical tagging pipeline in the requested
+# functional steps, while persisting progress to disk so the run can resume.
 
 library(GraphDB)
-library(tidyverse)
-library(httr2)
-
 
 # ---- Global config (safe defaults) ----
-EMBED_MODEL <- Sys.getenv("EMBED_MODEL", unset = "nomic-embed-text")
-TAGGER_MODEL <- Sys.getenv("TAGGER_MODEL", unset = "llama3.1:8b")
-
-# Support both OLLAMA_BASE and OLLAMA_BASE_URL env vars
-OLLAMA_BASE <- Sys.getenv(
-  "OLLAMA_BASE",
-  unset = Sys.getenv("OLLAMA_BASE_URL", unset = "http://localhost:11434")
-)
+config <- ollama_config()
 
 # 1) Read and unnest the forms.Rda file -----------------------------------
 forms_path <- "~/Downloads/form.Rda"
-stopifnot(file.exists(forms_path))
-load(forms_path)
-stopifnot(exists("forms"))
-
-forms_flat <- forms %>%
-  unnest(form) %>%
-  filter(!is.na(caption), nzchar(caption))
-
-# Keep a consistent 100-question slice for the demo
-demo_questions <- forms_flat %>%
-  distinct(caption) %>%
-  slice_head(n = 300)
-
-demo_forms <- tibble(form = list(demo_questions))
+progress_path <- "forms_tagger_progress.rds"
+if (file.exists(progress_path)) {
+  state <- load_tag_state(progress_path)
+} else {
+  forms <- load_forms(forms_path)
+  demo_questions <- unnest_questions(forms, limit_n = 300)
+  state <- new_tag_state(demo_questions)
+  save_tag_state(state, progress_path)
+}
 
 # 2) Embed each question using the Ollama embedder model -------------------
-# The embedding happens inside run_question_tagger(); we preview what will be
-# embedded to ensure the captions look correct.
-print(demo_questions %>% slice_head(n = 5))
+if (is.null(state$embeddings)) {
+  embeddings <- embed_multiple_questions(
+    texts = state$questions$caption,
+    model = config$embed_model,
+    base_url = config$base_url
+  )
+  state$questions$embedding <- embeddings
+  state$embeddings <- do.call(rbind, embeddings)
+  save_tag_state(state, progress_path)
+}
 
 # 3) Hierarchical clustering with configurable k ---------------------------
-# Choose the bottom-level cluster count (k) and optionally additional levels.
-k = 256
+k <- 256
 clusters_by_level <- binary_levels(k)
-print(clusters_by_level)
+
+if (is.null(state$hclust) || is.null(state$assignments) || is.null(state$clusters)) {
+  clustering <- cluster_embeddings(state$embeddings, clusters_by_level)
+  state$hclust <- clustering$hclust
+  state$assignments <- add_cluster_assignments(state$questions, state$hclust, clusters_by_level)
+  state$clusters <- build_cluster_index(state$assignments, clusters_by_level)
+  save_tag_state(state, progress_path)
+}
 
 # 4) Tag deepest clusters, then roll-up with child tags & samples ----------
-# Progress is written to disk after each cluster; if tagging fails the tag
-# will be marked "untagged" and the script will stop so you can resume.
-tagged <- run_question_tagger(
-  forms = demo_forms,
-  clusters_by_level = clusters_by_level,
-  limit_n = nrow(demo_questions),
-  sample_size = 5,
-  progress_path = "forms_tagger_progress.rds",
-  embed_model = EMBED_MODEL,
-  tag_model = TAGGER_MODEL
-)
+if (any(is.na(state$clusters$tag)) || any(state$clusters$tag == "untagged")) {
+  state <- tag_clusters_bottom_up(
+    state = state,
+    sample_size = 5,
+    progress_path = progress_path,
+    model = config$tagger_model,
+    base_url = config$base_url
+  )
+}
 
-# 5) Inspect the rolled-up tags -------------------------------------------
-tagged$clusters %>%
-  select(level, cluster_id, parent_cluster, tag) %>%
-  arrange(level, cluster_id) %>%
-  print(n = Inf)
+# 5) Build question-tag matrix --------------------------------------------
+if (is.null(state$tag_matrix)) {
+  state$tag_matrix <- build_question_tag_matrix(state$assignments, state$clusters)
+  save_tag_state(state, progress_path)
+}
 
-# 6) Map tagged clusters back to the sample questions ----------------------
-tagged$assignments %>%
-  select(id, caption, cluster_level_1) %>%
-  left_join(
-    tagged$clusters %>% filter(level == 1) %>% select(cluster_id, tag),
-    by = c("cluster_level_1" = "cluster_id")
-  ) %>%
-  arrange(cluster_level_1)
+# 6) Clean and audit tags --------------------------------------------------
+if (is.null(state$cleaned)) {
+  cleaned <- clean_tag_hierarchy(
+    state$tag_matrix,
+    levels = 1:6,
+    model = config$tagger_model,
+    base_url = config$base_url,
+    use_llm = FALSE
+  )
+  state$tag_matrix <- cleaned$cleaned_matrix
+  state$cleaned <- cleaned$mapping
+}
 
+if (is.null(state$audit)) {
+  state <- audit_tag_paths(state, allow_manual = FALSE)
+}
 
+save_tag_state(state, progress_path)
 
-#############################################
-
-
-tag_lookup <- tagged$clusters %>%
-  select(level, cluster_id, tag)
-
-questions_by_level <- tagged$assignments %>%
-  # cluster_level_1, cluster_level_2, ...
-  pivot_longer(
-    cols = starts_with("cluster_level_"),
-    names_to = "level_name",
-    values_to = "cluster_id"
-  ) %>%
-  mutate(
-    # "cluster_level_1" -> 1, etc.
-    level = as.integer(str_remove(level_name, "cluster_level_"))
-  ) %>%
-  left_join(tag_lookup, by = c("level", "cluster_id")) %>%
-  arrange(id, level)
-
-questions_by_level
-
-question_tag_matrix <- questions_by_level %>%
-  select(id, caption, level, tag) %>%
-  mutate(level_name = paste0("tag_level_", level)) %>%
-  select(-level) %>%
-  distinct() %>%
-  pivot_wider(
-    names_from = level_name,
-    values_from = tag
-  ) %>%
-  arrange(id)
-
-question_tag_matrix
+state$tag_matrix
+state$audit

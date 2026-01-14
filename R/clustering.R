@@ -30,24 +30,53 @@ binary_levels <- function(k_deep) {
 #'
 #' @return A list with \code{questions} and \code{assignments} tibbles.
 #'
-build_question_hierarchy <- function(forms, clusters_by_level, limit_n, embed_model, base) {
+build_question_hierarchy <- function(forms, clusters_by_level, limit_n, embed_model, base_url) {
   questions <- unnest_questions(forms, limit_n)
-  questions$embedding <- embed_multiple_questions(
+  embeddings <- embed_multiple_questions(
     texts = questions$caption,
     model = embed_model,
-    base = base
+    base_url = base_url
   )
+  questions$embedding <- embeddings
 
-  emb_matrix <- do.call(rbind, questions$embedding)
+  clustering <- cluster_embeddings(embeddings, clusters_by_level)
+  assignments <- add_cluster_assignments(questions, clustering$hclust, clusters_by_level)
+
+  list(questions = questions, assignments = assignments, hclust = clustering$hclust)
+}
+
+#' Cluster embeddings and return hclust object
+#'
+#' @param embeddings List or matrix of embeddings.
+#' @param clusters_by_level Integer vector of cluster counts by level.
+#'
+#' @return A list with hclust and distance matrix.
+#' @export
+cluster_embeddings <- function(embeddings, clusters_by_level) {
+  if (is.list(embeddings)) {
+    emb_matrix <- do.call(rbind, embeddings)
+  } else {
+    emb_matrix <- embeddings
+  }
   tree <- stats::hclust(stats::dist(emb_matrix), method = "ward.D2")
+  list(hclust = tree, dist = stats::dist(emb_matrix), clusters_by_level = clusters_by_level)
+}
 
+#' Add cluster assignments to question table
+#'
+#' @param questions Tibble with question data.
+#' @param hclust Hierarchical clustering object.
+#' @param clusters_by_level Integer vector of cluster counts by level.
+#'
+#' @return Tibble with cluster_level_* columns.
+#' @export
+add_cluster_assignments <- function(questions, hclust, clusters_by_level) {
   level_cols <- paste0("cluster_level_", seq_along(clusters_by_level))
   assignments <- questions
   for (i in seq_along(clusters_by_level)) {
-    assignments[[level_cols[[i]]]] <- stats::cutree(tree, k = clusters_by_level[[i]])
+    assignments[[level_cols[[i]]]] <- stats::cutree(hclust, k = clusters_by_level[[i]])
   }
-
-  list(questions = questions, assignments = assignments)
+  assignments
 }
 
 

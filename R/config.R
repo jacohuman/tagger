@@ -18,17 +18,14 @@ DEFAULT_TAGGER_MODEL <- "llama3.1:8b"
 #' @returns A list of Ollama configuration parameters.
 #'
 #' @export
-ollama_config <- function(base_url = NULL, embed_model = NULL, tagger_model = NULL) {
+ollama_config <- function(
+    base_url = Sys.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE),
+    embed_model = Sys.getenv("EMBED_MODEL", DEFAULT_EMBED_MODEL),
+    tagger_model = Sys.getenv("TAGGER_MODEL", DEFAULT_TAGGER_MODEL)
+) {
   list(
-    if (is.null(base_url)) {
-      base_url     = Sys.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE)
-    }
-    if (is.null(embed_model)) {
-      embed_model    = Sys.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE)
-    }
-    if (is.null(tagger_model)) {
-      tagger_model     = Sys.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE)
-    }
+    base_url = base_url,
+    embed_model = embed_model,
+    tagger_model = tagger_model
   )
 }
-
