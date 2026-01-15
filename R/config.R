@@ -15,7 +15,11 @@ DEFAULT_TAGGER_MODEL <- "llama3.1:8b"
 #' Invoke this function to return the list of configuration parameters to use
 #' in subsequent embedding or tagging logic.
 #'
-#' @returns A list of Ollama configuration parameters.
+#' @return A list of Ollama configuration parameters.
+#'
+#' @examples
+#' ollama_config()
+#' ollama_config(base_url = "http://localhost:11434")
 #'
 #' @export
 ollama_config <- function(

@@ -3,6 +3,15 @@
 #' @param tag_matrix Tag matrix with tag_level_* columns.
 #'
 #' @return Tibble with per-question audit flags.
+#'
+#' @examples
+#' tag_matrix <- tibble::tibble(
+#'   id = c("q_001", "q_002"),
+#'   caption = c("Age?", "Income?"),
+#'   tag_level_1 = c("age", NA_character_),
+#'   tag_level_2 = c("demographics", NA_character_)
+#' )
+#' audit_tag_matrix(tag_matrix)
 #' @export
 audit_tag_matrix <- function(tag_matrix) {
   tag_cols <- grep("^tag_level_", names(tag_matrix), value = TRUE)
@@ -35,6 +44,17 @@ audit_tag_matrix <- function(tag_matrix) {
 #' @param allow_manual Logical, whether to allow manual correction.
 #'
 #' @return Updated `tag_state` with `audit` tibble.
+#'
+#' @examples
+#' state <- list(
+#'   tag_matrix = tibble::tibble(
+#'     id = "q_001",
+#'     caption = "Age?",
+#'     tag_level_1 = "age"
+#'   )
+#' )
+#' class(state) <- "tag_state"
+#' audit_tag_paths(state, allow_manual = FALSE)
 #' @export
 audit_tag_paths <- function(state, allow_manual = TRUE) {
   stopifnot(inherits(state, "tag_state"))

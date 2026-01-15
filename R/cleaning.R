@@ -4,6 +4,13 @@
 #' @param level Level number to build parent vocab for.
 #'
 #' @return Tibble with parent/child counts for the level.
+#'
+#' @examples
+#' tag_matrix <- tibble::tibble(
+#'   tag_level_1 = c("age", "income"),
+#'   tag_level_2 = c("demographics", "demographics")
+#' )
+#' build_parent_vocab_for_level(tag_matrix, level = 1)
 #' @importFrom rlang .data
 #' @export
 build_parent_vocab_for_level <- function(tag_matrix, level) {
@@ -27,6 +34,13 @@ build_parent_vocab_for_level <- function(tag_matrix, level) {
 #' @param levels Integer vector of levels to include.
 #'
 #' @return Tibble with parent/child counts across levels.
+#'
+#' @examples
+#' tag_matrix <- tibble::tibble(
+#'   tag_level_1 = c("age", "income"),
+#'   tag_level_2 = c("demographics", "demographics")
+#' )
+#' build_parent_vocab(tag_matrix, levels = 1)
 #' @export
 build_parent_vocab <- function(tag_matrix, levels = 1:6) {
   purrr::map_dfr(levels, ~ build_parent_vocab_for_level(tag_matrix, .x))
@@ -41,6 +55,21 @@ build_parent_vocab <- function(tag_matrix, levels = 1:6) {
 #' @param timeout_sec Request timeout.
 #'
 #' @return Mapping tibble with canonical tags.
+#'
+#' @examples
+#' \dontrun{
+#' vocab_group <- tibble::tibble(
+#'   level_num = 1,
+#'   parent_tag = "demographics",
+#'   tag = c("age", "ages"),
+#'   n = c(10, 2)
+#' )
+#' llm_clean_parent_group(
+#'   vocab_group,
+#'   model = "llama3.1:8b",
+#'   base_url = "http://localhost:11434"
+#' )
+#' }
 #' @export
 llm_clean_parent_group <- function(
     vocab_group,
@@ -150,6 +179,21 @@ llm_clean_parent_group <- function(
 #' @param timeout_sec Request timeout.
 #'
 #' @return Mapping tibble with canonical tags.
+#'
+#' @examples
+#' \dontrun{
+#' parent_vocab <- tibble::tibble(
+#'   level_num = 1,
+#'   parent_tag = "demographics",
+#'   tag = c("age", "ages"),
+#'   n = c(10, 2)
+#' )
+#' build_tag_mapping_with_llm_parent(
+#'   parent_vocab,
+#'   model = "llama3.1:8b",
+#'   base_url = "http://localhost:11434"
+#' )
+#' }
 #' @export
 build_tag_mapping_with_llm_parent <- function(
     parent_vocab,
@@ -180,6 +224,15 @@ build_tag_mapping_with_llm_parent <- function(
 #' @param mapping Mapping tibble from [build_tag_mapping_with_llm_parent()].
 #'
 #' @return Updated tag matrix with canonical tags applied.
+#'
+#' @examples
+#' tag_matrix <- tibble::tibble(tag_level_1 = c("age", "ages"))
+#' mapping <- tibble::tibble(
+#'   level_num = 1,
+#'   old_tag = "ages",
+#'   canonical_tag = "age"
+#' )
+#' apply_tag_mapping(tag_matrix, mapping)
 #' @export
 apply_tag_mapping <- function(tag_matrix, mapping) {
   cleaned <- tag_matrix
@@ -204,6 +257,13 @@ apply_tag_mapping <- function(tag_matrix, mapping) {
 #' @param use_llm Logical, whether to call the LLM to normalize tags.
 #'
 #' @return List with cleaned tag matrix and optional mapping.
+#'
+#' @examples
+#' tag_matrix <- tibble::tibble(
+#'   tag_level_1 = c("age", "income"),
+#'   tag_level_2 = c("demographics", "demographics")
+#' )
+#' clean_tag_hierarchy(tag_matrix, use_llm = FALSE)
 #' @export
 clean_tag_hierarchy <- function(
     tag_matrix,

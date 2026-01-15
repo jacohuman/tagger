@@ -25,15 +25,19 @@
 #' }
 #'
 #' @examples
+#' forms <- tibble::tibble(
+#'   form = list(tibble::tibble(caption = c("Age", "Household size", "Age")))
+#' )
 #' unique_q <- unnest_questions(forms, limit_n = 100)
 #'
 #' @importFrom tidyr unnest
+#' @importFrom dplyr %>%
 #' @importFrom dplyr transmute
 #' @importFrom dplyr filter
 #' @importFrom dplyr mutate
 #' @importFrom dplyr distinct
-#' @importFrom slice_head
-#' @importFrom row_number
+#' @importFrom dplyr slice_head
+#' @importFrom dplyr row_number
 #' @importFrom stringr str_squish
 #'
 #' @export
@@ -62,17 +66,19 @@ unnest_questions = function(forms, limit_n = Inf) {
 #' @param model Embedding model name/tag available in the running Ollama instance.
 #' @param base_url Base URL for the Ollama server,
 #'   e.g. \code{"http://localhost:11434"}.
+#' @param timeout_sec Request timeout in seconds.
 #'
 #' @return A numeric vector containing the embedding for \code{text}.
 #'
 #' @examples
-#' v <- embed_single_question("How many people live in your household?")
+#' \dontrun{
+#' v <- embed_single_question(
+#'   "How many people live in your household?",
+#'   model = "nomic-embed-text",
+#'   base_url = "http://localhost:11434"
+#' )
 #' length(v)  # embedding dimension
-#'
-#' @importFromr httr2 req_timeout
-#' @importFrom httr2 req_perform
-#' @importFrom httr2 resp_body_json
-#' @importFrom httr2 req_body_json
+#' }
 #'
 #' @export
 embed_single_question = function(text, model, base_url, timeout_sec = 60) {
@@ -90,14 +96,21 @@ embed_single_question = function(text, model, base_url, timeout_sec = 60) {
 #' @param texts Character vector. Each element is a question to embed.
 #' @param model Embedding model name or tag available on the running Ollama instance.
 #' @param base_url Base URL for the Ollama server.
+#' @param timeout_sec Request timeout in seconds.
 #'
 #' @return A list of numeric vectors. Each list element is the embedding for
 #'   the corresponding element of \code{texts}.
 #'
 #' @examples
+#' \dontrun{
 #' qs <- c("What is your age?", "What is your highest level of education?")
-#' embs <- embed_multiple_questions(qs)
+#' embs <- embed_multiple_questions(
+#'   qs,
+#'   model = "nomic-embed-text",
+#'   base_url = "http://localhost:11434"
+#' )
 #' str(embs)
+#' }
 #'
 #' @seealso [embed_single_question()]
 #'
