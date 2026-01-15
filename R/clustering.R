@@ -4,6 +4,9 @@
 #'
 #' @return Integer vector like c(k, k/2, ..., 2) for use as clusters_by_level.
 #'         Level 1 = most granular (k clusters), last level = 2 clusters.
+#'
+#' @examples
+#' binary_levels(8)
 #' @export
 binary_levels <- function(k_deep) {
   if (k_deep < 2) stop("Number of clusters at the deepest level (k_deep) must be >= 2.")
@@ -51,6 +54,10 @@ build_question_hierarchy <- function(forms, clusters_by_level, limit_n, embed_mo
 #' @param clusters_by_level Integer vector of cluster counts by level.
 #'
 #' @return A list with hclust and distance matrix.
+#'
+#' @examples
+#' embeddings <- matrix(rnorm(40), ncol = 4)
+#' cluster_embeddings(embeddings, clusters_by_level = c(4, 2))
 #' @export
 cluster_embeddings <- function(embeddings, clusters_by_level) {
   if (is.list(embeddings)) {
@@ -69,6 +76,12 @@ cluster_embeddings <- function(embeddings, clusters_by_level) {
 #' @param clusters_by_level Integer vector of cluster counts by level.
 #'
 #' @return Tibble with cluster_level_* columns.
+#'
+#' @examples
+#' questions <- tibble::tibble(id = c("q_001", "q_002"), caption = c("Age?", "Income?"))
+#' embeddings <- matrix(rnorm(20), ncol = 10)
+#' tree <- stats::hclust(stats::dist(embeddings))
+#' add_cluster_assignments(questions, tree, clusters_by_level = c(2))
 #' @export
 add_cluster_assignments <- function(questions, hclust, clusters_by_level) {
   level_cols <- paste0("cluster_level_", seq_along(clusters_by_level))
@@ -97,6 +110,12 @@ add_cluster_assignments <- function(questions, hclust, clusters_by_level) {
 #'     \item \code{tag}
 #'   }
 #' @keywords internal
+#' @importFrom dplyr %>%
+#' @importFrom dplyr group_by
+#' @importFrom dplyr summarise
+#' @importFrom dplyr mutate
+#' @importFrom dplyr arrange
+#' @importFrom rlang .data
 build_cluster_index <- function(assignments, clusters_by_level) {
   level_cols <- paste0("cluster_level_", seq_along(clusters_by_level))
   max_level <- length(level_cols)

@@ -19,6 +19,16 @@
 #'
 #' @return An httr2 response object.
 #'
+#' @examples
+#' \dontrun{
+#' resp <- ollama_request(
+#'   base_url = "http://localhost:11434",
+#'   endpoint = "/api/tags",
+#'   body = list()
+#' )
+#' resp$status_code
+#' }
+#'
 #' @importFrom httr2 request
 #' @importFrom httr2 req_body_json
 #' @importFrom httr2 req_perform
@@ -47,6 +57,15 @@ ollama_request <- function(base_url, endpoint, body, timeout_sec = 60) {
 #' @param timeout_sec Request timeout in seconds.
 #'
 #' @return Character response content.
+#'
+#' @examples
+#' \dontrun{
+#' ollama_generate(
+#'   prompt = "Return the word ok.",
+#'   model = "llama3.1:8b",
+#'   base_url = "http://localhost:11434"
+#' )
+#' }
 #'
 #' @importFrom httr2 resp_body_json
 #'
@@ -88,6 +107,15 @@ ollama_generate <- function(
 #'
 #' @return Numeric embedding vector.
 #'
+#' @examples
+#' \dontrun{
+#' ollama_embed(
+#'   text = "How many people live in your household?",
+#'   model = "nomic-embed-text",
+#'   base_url = "http://localhost:11434"
+#' )
+#' }
+#'
 #' @export
 ollama_embed <- function(text, model, base_url, timeout_sec = 60) {
   resp <- ollama_request(
@@ -109,7 +137,12 @@ ollama_embed <- function(text, model, base_url, timeout_sec = 60) {
 #' @param base_url Base url where the Ollama instance is running.
 #' @param model_name Desired model to use for embedding/tagging.
 #'
-#' @returns TRUE on connection success.
+#' @return TRUE on connection success.
+#'
+#' @examples
+#' \dontrun{
+#' test_connection("http://localhost:11434", "llama3.1:8b")
+#' }
 #'
 #' @export
 test_connection <- function(base_url, model_name) {

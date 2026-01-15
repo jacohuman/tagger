@@ -24,6 +24,12 @@ new_tag_state <- function(questions) {
 #' @param state tag_state to write to disk
 #' @param path Path where the tag_state should be written
 #'
+#' @examples
+#' state <- list(questions = tibble::tibble(id = "q_001", caption = "Age?"))
+#' class(state) <- "tag_state"
+#' tmp <- tempfile(fileext = ".rds")
+#' save_tag_state(state, tmp)
+#'
 #' @export
 save_tag_state <- function(state, path) {
   saveRDS(state, path)
@@ -32,6 +38,11 @@ save_tag_state <- function(state, path) {
 #' Load tagging state from disk
 #'
 #' @param path Path from where the tag_state should be read
+#'
+#' @examples
+#' \dontrun{
+#' state <- load_tag_state("question_tagger_state.rds")
+#' }
 #'
 #' @export
 load_tag_state <- function(path) {

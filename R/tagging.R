@@ -400,6 +400,20 @@ sanitize_label <- function(raw) {
 #' @param clusters Cluster tags with level and cluster_id.
 #'
 #' @return Tag matrix with tag_level_* columns.
+#'
+#' @examples
+#' assignments <- tibble::tibble(
+#'   id = c("q_001", "q_002"),
+#'   caption = c("Age?", "Income?"),
+#'   cluster_level_1 = c(1L, 2L),
+#'   cluster_level_2 = c(1L, 1L)
+#' )
+#' clusters <- tibble::tibble(
+#'   level = c(1L, 1L, 2L),
+#'   cluster_id = c(1L, 2L, 1L),
+#'   tag = c("age", "income", "demographics")
+#' )
+#' build_question_tag_matrix(assignments, clusters)
 #' @export
 build_question_tag_matrix <- function(assignments, clusters) {
   tag_lookup <- clusters |>
@@ -438,6 +452,16 @@ build_question_tag_matrix <- function(assignments, clusters) {
 #' @param use_llm_cleaning Logical, whether to use LLM cleanup.
 #'
 #' @return A `tag_state` object with all pipeline outputs.
+#'
+#' @examples
+#' \dontrun{
+#' state <- run_tagger_pipeline(
+#'   forms_path = "forms.Rda",
+#'   clusters_by_level = c(8, 4, 2),
+#'   limit_n = 200
+#' )
+#' state$tag_matrix
+#' }
 #' @export
 run_tagger_pipeline <- function(
     forms_path,

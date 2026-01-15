@@ -2,6 +2,11 @@
 #'
 #' @param path Path to the .Rda forms file to read
 #'
+#' @examples
+#' \dontrun{
+#' forms <- load_forms("forms.Rda")
+#' }
+#'
 #' @export
 load_forms <- function(path) {
   stopifnot(file.exists(path))
