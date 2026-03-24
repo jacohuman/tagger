@@ -77,7 +77,7 @@ ollama_generate <- function(
     num_predict = 64,
     temperature = 0.2,
     format = NULL,
-    timeout_sec = 180
+    timeout_sec = 250
 ) {
   body <- list(
     model = model,

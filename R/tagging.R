@@ -16,9 +16,9 @@
 #'   level to the top. The final entry should typically be \code{2} to satisfy
 #'   the "two main categories" requirement.
 #' @param limit_n Maximum number of unique questions to consider. Passed to
-#'   [unnest_questions()].
+#'   [unnest_questions()]. This is used for the sake of testing so that the pipeline runs quicker.
 #' @param sample_size Number of sample questions to pass to the tagger for each
-#'   cluster.
+#'   cluster. The larger the sample size, the bigger the prompt and the longer the model will take to respond.
 #' @param progress_path File path where tagging progress should be stored as an
 #'   RDS file. When the file exists it is read and used to resume tagging.
 #' @param embed_model Name of the Ollama embedding model.
@@ -50,6 +50,7 @@
 #' @importFrom stats dist hclust cutree
 #' @importFrom utils head
 #' @importFrom rlang .data
+#'
 #' @export
 run_question_tagger <- function(
     forms,
@@ -77,10 +78,13 @@ run_question_tagger <- function(
       base_url = base_url
     )
 
-    # hierarchy$questions is your embedded questions dataframe (step 2)
-    # hierarchy$assignments holds cluster ids per level (step 4)
+    # hierarchy$questions is the embedded questions dataframe.
+    # hierarchy$assignments holds cluster ids per level.
 
     clusters <- build_cluster_index(hierarchy$assignments, clusters_by_level)
+
+    print("Printing clusters")
+    print(clusters)
     state <- list(
       questions = hierarchy$questions,
       assignments = hierarchy$assignments,
@@ -104,9 +108,9 @@ run_question_tagger <- function(
   )
 
   # Returned list:
-  # - state$questions   : id, caption, embedding  (your step 2)
-  # - state$assignments : question + cluster_level_* columns (step 4)
-  # - state$clusters    : one row per cluster with level, parent_cluster, tag, question_ids
+  # - state$questions   : id, caption, embedding.
+  # - state$assignments : question + cluster_level_* columns.
+  # - state$clusters    : one row per cluster with level, parent_cluster, tag, question_ids.
 
   state
 }
@@ -117,7 +121,9 @@ run_question_tagger <- function(
 #' @description
 #' Iterates through each level, generating tags for clusters whose tags are not
 #' yet set. After each successful tag, the updated state is written to
-#' \code{progress_path}.
+#' \code{progress_path}. The hierarchy is tagged bottom up meaning the leaf nodes
+#' are tagged first. Thereafter parent nodes are tagged with each tag getting broader
+#' to describe a bigger selection of questions.
 #'
 #' @param clusters Tibble produced by [build_cluster_index()].
 #' @param questions Question tibble with \code{id} and \code{caption} columns.
@@ -146,6 +152,9 @@ tag_clusters_bottom_up <- function(
     message("\n---- Tagging level ", level_idx, " of ", max_level, " ----")
     level_clusters <- clusters[clusters$level == level_idx, , drop = FALSE]
 
+    print("level_clusters")
+    print(level_clusters)
+
     for (row_idx in seq_len(nrow(level_clusters))) {
       cluster_row <- level_clusters[row_idx, ]
       # Only skip clusters that already have a *real* tag.
@@ -160,9 +169,14 @@ tag_clusters_bottom_up <- function(
       q_caps <- questions$caption[match(q_ids, questions$id)]
       q_caps <- unique(na.omit(q_caps))
 
-      # Representative sample for this cluster (your step 3 / 4)
+      print("Printing q_ids")
+      print(q_ids)
+      print("Printing q_caps")
+      print(q_caps)
+
+      # Representative sample for this cluster
       if (length(q_caps) > sample_size) {
-        set.seed(42)  # deterministic sampling if you like
+        # set.seed(42)  deterministic sampling if needed
         examples <- sample(q_caps, sample_size)
       } else {
         examples <- q_caps
@@ -174,6 +188,9 @@ tag_clusters_bottom_up <- function(
           clusters$tag != "untagged"
       ]
 
+      print("Printing existing")
+      print(existing)
+
       if (level_idx == 1L) {
         # Deepest level: tag small clusters directly
         tag <- tag_one_cluster_ollama(
@@ -184,6 +201,9 @@ tag_clusters_bottom_up <- function(
         )
       } else {
         # Parent levels: roll up from children
+        # Each parent tag is determined by considering information regarding its
+        # children.  The two child tags are given as context as well as sample
+        # question captions that are contained within each child cluster.
         children <- clusters[
           clusters$parent_cluster == cluster_row$cluster_id &
             clusters$level == level_idx - 1L,
@@ -191,16 +211,43 @@ tag_clusters_bottom_up <- function(
           drop = FALSE
         ]
 
+        print("Printing children")
+        print(children)
+
+        # This function collects info about each of the children used as context
+        # within the prompt
         child_details <- purrr::map(seq_len(nrow(children)), function(i) {
           child_row <- children[i, ]
-          q_ids_child <- child_row$question_ids[[1]]
-          q_caps_child <- questions$caption[match(q_ids_child, questions$id)]
+
+          q_ids_child <- unique(na.omit(child_row$question_ids[[1]]))
+          if (length(q_ids_child) > sample_size) {
+            sample_ids <- sample(q_ids_child, sample_size)
+          } else {
+            sample_ids <- q_ids_child
+          }
+
+          # Since we're tagging parent at `level_idx`, the child level is `level_idx - 1`
+          # Include the full known hierarchy up to the child level.
+          formatted_samples <- purrr::map_chr(
+            sample_ids,
+            ~ format_question_with_path(
+              q_id = .x,
+              questions = questions,
+              assignments = assignments,
+              clusters = clusters,
+              upto_level = level_idx - 1L
+            )
+          )
+
           list(
             cluster_id = child_row$cluster_id,
             tag = child_row$tag,
-            samples = utils::head(unique(na.omit(q_caps_child)), sample_size)
+            samples = formatted_samples
           )
         })
+
+        print("Printing child details")
+        print(child_details)
 
         tag <- tag_parent_cluster(
           child_clusters = child_details,
@@ -222,7 +269,7 @@ tag_clusters_bottom_up <- function(
           clusters$cluster_id == cluster_row$cluster_id
       ] <- final_tag
 
-      # Persist full state after each cluster (your resume requirement)
+      # Persist full state after each cluster.
       state$clusters <- clusters
       save_tag_state(state, progress_path)
       message(
@@ -231,7 +278,7 @@ tag_clusters_bottom_up <- function(
         " -> tag '", final_tag, "'."
       )
 
-      # If this tag is untagged, stop so you can investigate / resume
+      # If this tag is untagged, stop to investigate / resume later.
       if (identical(final_tag, "untagged")) {
         stop(
           sprintf(
@@ -251,6 +298,7 @@ tag_clusters_bottom_up <- function(
 #' @param child_clusters List of child cluster metadata including tag and sample
 #'   questions.
 #' @param parent_examples Sample questions belonging to the parent cluster.
+#'
 #' @inheritParams tag_one_cluster_ollama
 #'
 #' @return A character scalar label for the parent cluster.
@@ -264,10 +312,15 @@ tag_parent_cluster <- function(
 
   child_lines <- purrr::map_chr(child_clusters, function(child) {
     tag <- rlang::`%||%`(child$tag, "untagged")
-    samples <- paste(child$samples, collapse = " | ")
-    paste0("- child cluster ", child$cluster_id,
-           " (tag: ", tag, "): ", samples)
+    samp <- child$samples
+    if (length(samp) == 0) samp <- "(no samples)"
+
+    paste0(
+      "- child cluster ", child$cluster_id, " (tag: ", tag, ")\n",
+      paste0("  - ", samp, collapse = "\n")
+    )
   })
+
 
   prompt <- paste(
     "You are building a hierarchical label tree for survey questions.",
@@ -283,8 +336,8 @@ tag_parent_cluster <- function(
     "REQUIREMENTS:",
     "- The parent label must be STRICTLY MORE GENERAL than EACH child tag.",
     "- It must still capture a clear, coherent theme shared by all child clusters.",
-    "- Do NOT return any of the child tags unchanged, unless it is absolutely impossible",
-    "  to find a broader, meaningful word.",
+    "- Do NOT output any label that appears anywhere in the provided {path: ...} hierarchies.",
+    "  (Those are lower-level labels that already exist.)",
     "- Avoid very broad, generic words like 'survey', 'questions', 'general',",
     "  'other', 'miscellaneous', 'unknown', 'unclear'.",
     "- Compared to the leaf-level tags, this label should be MORE GENERAL, not more specific.",
@@ -541,3 +594,56 @@ run_tagger_pipeline <- function(
 
   state
 }
+
+# Return vector of cluster_level_* column names in numeric order
+cluster_level_cols <- function(assignments) {
+  cols <- grep("^cluster_level_[0-9]+$", names(assignments), value = TRUE)
+  # order by the numeric suffix
+  ord <- order(as.integer(sub("^cluster_level_", "", cols)))
+  cols[ord]
+}
+
+# Safely get a cluster tag at a given level/id
+get_cluster_tag <- function(clusters, level, cluster_id) {
+  hit <- clusters$tag[clusters$level == level & clusters$cluster_id == cluster_id]
+  hit <- hit[!is.na(hit) & nzchar(hit)]
+  if (length(hit) == 0) return("untagged")
+  hit[[1]]
+}
+
+# Build "tag1 > tag2 > tag3" for a question, up to a level
+question_tag_path <- function(q_id, assignments, clusters, upto_level) {
+  row_idx <- match(q_id, assignments$id)
+  if (is.na(row_idx)) return(character())
+
+  lvl_cols <- cluster_level_cols(assignments)
+  # clamp upto_level to available columns
+  upto_level <- min(upto_level, length(lvl_cols))
+  if (upto_level < 1) return(character())
+
+  path <- character(0)
+  for (lvl in seq_len(upto_level)) {
+    cid <- assignments[[lvl_cols[[lvl]]]][row_idx]
+    if (is.na(cid) || !nzchar(as.character(cid))) {
+      path <- c(path, "untagged")
+      next
+    }
+    path <- c(path, get_cluster_tag(clusters, lvl, cid))
+  }
+
+  path
+}
+
+# Format a sample question with its hierarchy
+format_question_with_path <- function(q_id, questions, assignments, clusters, upto_level) {
+  cap <- questions$caption[match(q_id, questions$id)]
+  cap <- cap[!is.na(cap)]
+  if (length(cap) == 0) cap <- ""
+  cap <- cap[[1]]
+
+  path <- question_tag_path(q_id, assignments, clusters, upto_level = upto_level)
+  if (length(path) == 0) return(cap)
+
+  paste0(cap, "  {path: ", paste(path, collapse = " > "), "}")
+}
+

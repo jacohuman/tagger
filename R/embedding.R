@@ -17,6 +17,8 @@
 #'
 #' @param forms A data frame (or tibble) with a list-column named `form`
 #'   containing data frames/tibbles that include a `caption` column for each question.
+#' @param limit_n Limit the number of question captions to select for tagging.  This is
+#'   used during development to reduce the waiting time between pipeline runs.
 #'
 #' @return A tibble with two columns:
 #' \itemize{

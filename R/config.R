@@ -5,7 +5,7 @@
 # environment variables with the same names or passing them as parameters.
 
 # Defaults
-DEFAULT_OLLAMA_BASE  <- "http://localhost:11434"
+DEFAULT_OLLAMA_BASE  <- "http://localhost:11435"
 DEFAULT_EMBED_MODEL  <- "nomic-embed-text"
 DEFAULT_TAGGER_MODEL <- "llama3.1:8b"
 
