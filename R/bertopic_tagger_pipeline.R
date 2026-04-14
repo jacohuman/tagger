@@ -35,29 +35,44 @@ run_bertopic_tagger_pipeline <- function(
 ) {
   questions <- unnest_questions(forms, limit_n = limit_n)
 
-  bertopic <- fit_bertopic_topics(
-    texts = questions$caption,
-    bertopic_kwargs = bertopic_kwargs
-  )
-
-  questions$topic_id <- bertopic$topic_ids
-
-  hierarchy <- build_bertopic_hierarchy(
-    questions = questions,
-    question_embeddings = embed_multiple_questions(
+  if (!is.null(progress_path) && file.exists(progress_path)) {
+    state <- load_tag_state(progress_path)
+    if (!inherits(state, "tag_state")) {
+      stop("Progress file is not a tag_state object. Remove it to restart BERTopic tagging.", call. = FALSE)
+    }
+  } else {
+    question_embeddings <- embed_multiple_questions(
       texts = questions$caption,
       model = config$embed_model,
       base_url = config$base_url
-    ),
-    topic_levels = topic_levels
-  )
+    )
+    embedding_matrix <- do.call(rbind, question_embeddings)
 
-  state <- structure(list(
-    questions = hierarchy$questions,
-    assignments = hierarchy$assignments,
-    clusters = hierarchy$clusters,
-    clusters_by_level = hierarchy$clusters_by_level
-  ), class = "tag_state")
+    bertopic <- fit_bertopic_topics(
+      texts = questions$caption,
+      embeddings = embedding_matrix,
+      bertopic_kwargs = bertopic_kwargs
+    )
+
+    questions$topic_id <- bertopic$topic_ids
+
+    hierarchy <- build_bertopic_hierarchy(
+      questions = questions,
+      question_embeddings = embedding_matrix,
+      topic_levels = topic_levels
+    )
+
+    state <- structure(list(
+      questions = hierarchy$questions,
+      assignments = hierarchy$assignments,
+      clusters = hierarchy$clusters,
+      clusters_by_level = hierarchy$clusters_by_level
+    ), class = "tag_state")
+
+    if (!is.null(progress_path)) {
+      save_tag_state(state, progress_path)
+    }
+  }
 
   state <- tag_clusters_bottom_up(
     state = state,
@@ -109,7 +124,7 @@ run_bertopic_tagger_pipeline <- function(
   reordered <- reorder_tag_matrix_by_support(collapsed)
 
   out <- list(
-    bertopic = bertopic,
+    bertopic = if (exists("bertopic")) bertopic else NULL,
     state = state,
     tag_matrix = tag_matrix,
     clean = clean_res,
@@ -123,21 +138,19 @@ run_bertopic_tagger_pipeline <- function(
     tag_matrix_final = reordered$tag_matrix_clean
   )
 
-  if (!is.null(progress_path)) {
-    saveRDS(out, progress_path)
-  }
-
   out
 }
 
 #' Fit BERTopic and return per-document topic IDs
 #'
 #' @param texts Character vector of question captions.
+#' @param embeddings Optional numeric matrix of precomputed embeddings.
+#'   When supplied, BERTopic skips its own embedding model.
 #' @param bertopic_kwargs Named list forwarded to BERTopic constructor.
 #'
 #' @return List with topic_ids and Python objects used for tracing.
 #' @export
-fit_bertopic_topics <- function(texts, bertopic_kwargs = list()) {
+fit_bertopic_topics <- function(texts, embeddings = NULL, bertopic_kwargs = list()) {
   if (!requireNamespace("reticulate", quietly = TRUE)) {
     stop("Package 'reticulate' is required for BERTopic.", call. = FALSE)
   }
@@ -156,7 +169,12 @@ fit_bertopic_topics <- function(texts, bertopic_kwargs = list()) {
   kwargs <- utils::modifyList(default_kwargs, bertopic_kwargs)
 
   model <- do.call(bertopic_mod$BERTopic, kwargs)
-  fit <- model$fit_transform(texts)
+
+  fit <- if (is.null(embeddings)) {
+    model$fit_transform(texts)
+  } else {
+    model$fit_transform(texts, embeddings = embeddings)
+  }
 
   topic_ids <- tryCatch(
     reticulate::py_to_r(fit[[1]]),
