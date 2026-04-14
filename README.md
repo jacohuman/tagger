@@ -114,6 +114,12 @@ forms <- load_forms("path/to/forms.Rda")
 # Optional safety check for Python side
 check_bertopic_environment()
 
+# If any entries are FALSE, install everything in one step
+install_bertopic_environment()
+
+# Re-check until all entries are TRUE
+check_bertopic_environment()
+
 state <- run_bertopic_tagger_pipeline(
   forms = forms,
   sample_size = 6,
