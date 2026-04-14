@@ -1,0 +1,2 @@
+# Generated manually; run devtools::document() to refresh.
+exportPattern("^[[:alpha:]]+")

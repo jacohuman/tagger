@@ -1,0 +1,27 @@
+Package: tagger
+Type: Package
+Title: Survey Question Tagging and JSON-LD Utilities
+Version: 0.1.0
+Authors@R: person(given = "Tagger", family = "Maintainers", role = c("aut", "cre"), email = "maintainers@example.com")
+Description: Tools to import survey data, build hierarchical clusters of question text,
+    assign hierarchical tags with Ollama, and export survey entities as JSON-LD.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Depends:
+    R (>= 4.2),
+    dplyr,
+    tidyr,
+    purrr,
+    stringr,
+    stringi,
+    tibble,
+    rlang,
+    jsonlite,
+    httr2
+Suggests:
+    devtools,
+    reticulate,
+    testthat

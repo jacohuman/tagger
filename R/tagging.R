@@ -23,7 +23,7 @@
 #'   RDS file. When the file exists it is read and used to resume tagging.
 #' @param embed_model Name of the Ollama embedding model.
 #' @param tag_model Name of the Ollama chat model used for labeling.
-#' @param base Base URL for the Ollama server,
+#' @param base_url Base URL for the Ollama server,
 #'   e.g. \code{"http://localhost:11434"}.
 #'
 #' @return A list containing:
@@ -197,7 +197,9 @@ tag_clusters_bottom_up <- function(
           captions = examples,
           cluster_id = cluster_row$cluster_id,
           model = model,
-          base_url = base_url
+          base_url = base_url,
+          level_idx = level_idx,
+          max_level = max_level
         )
       } else {
         # Parent levels: roll up from children
@@ -254,7 +256,9 @@ tag_clusters_bottom_up <- function(
           parent_examples = examples,
           cluster_id = cluster_row$cluster_id,
           model = model,
-          base_url = base_url
+          base_url = base_url,
+          level_idx = level_idx,
+          max_level = max_level
         )
       }
 
@@ -293,6 +297,92 @@ tag_clusters_bottom_up <- function(
   state
 }
 
+
+#' Build an instruction block for tag generation
+#'
+#' @param level_idx Integer hierarchy level being tagged.
+#' @param max_level Maximum hierarchy level in the run.
+#' @param is_parent Logical, whether the target cluster has child clusters.
+#'
+#' @return Character scalar prompt instruction block.
+#' @keywords internal
+build_tagging_instruction_block <- function(level_idx, max_level, is_parent = FALSE) {
+  scope_line <- if (level_idx <= 1L) {
+    "You are assigning a LEAF label for closely related survey questions."
+  } else if (level_idx >= max_level) {
+    "You are assigning a TOP-LEVEL label that is broad but still meaningful."
+  } else {
+    "You are assigning a MID-LEVEL label that generalises lower labels while remaining specific."
+  }
+
+  parent_line <- if (is_parent) {
+    "The label MUST cover every child cluster and be broader than each child label."
+  } else {
+    "The label should describe the strongest shared intent across all examples."
+  }
+
+  paste(
+    scope_line,
+    parent_line,
+    "OUTPUT FORMAT:",
+    "- Output ONE SHORT LABEL (exactly one word), lowercase, ASCII letters only.",
+    "- No punctuation, no spaces, no quotes, no explanations.",
+    "QUALITY REQUIREMENTS:",
+    "- Prefer domain-relevant, human-readable topic words.",
+    "- Avoid generic words: survey, question, general, misc, other, unknown.",
+    "- Avoid repeating labels already present in provided hierarchy paths.",
+    sep = "\n"
+  )
+}
+
+#' Build a leaf-cluster prompt
+#'
+#' @param captions Character vector of sample questions.
+#' @param cluster_id Cluster identifier.
+#' @param level_idx Level being tagged.
+#' @param max_level Maximum level in hierarchy.
+#'
+#' @return Character prompt to send to the language model.
+#' @keywords internal
+build_leaf_tag_prompt <- function(captions, cluster_id, level_idx, max_level) {
+  examples <- paste0("- ", captions, collapse = "\n")
+
+  paste(
+    "You are labeling a cluster of survey questions.",
+    build_tagging_instruction_block(level_idx = level_idx, max_level = max_level, is_parent = FALSE),
+    "",
+    paste0("Hierarchy level: ", level_idx, " of ", max_level),
+    paste0("Cluster id: ", cluster_id),
+    "",
+    "Example questions:",
+    examples,
+    sep = "\n"
+  )
+}
+
+#' Build a parent-cluster prompt
+#'
+#' @param child_lines Formatted character vector describing child clusters.
+#' @param cluster_id Cluster identifier.
+#' @param level_idx Level being tagged.
+#' @param max_level Maximum level in hierarchy.
+#'
+#' @return Character prompt for parent cluster labeling.
+#' @keywords internal
+build_parent_tag_prompt <- function(child_lines, cluster_id, level_idx, max_level) {
+  paste(
+    "You are building a hierarchical label tree for survey questions.",
+    build_tagging_instruction_block(level_idx = level_idx, max_level = max_level, is_parent = TRUE),
+    "",
+    paste0("Hierarchy level: ", level_idx, " of ", max_level),
+    "Child clusters (with tags and example questions):",
+    paste(child_lines, collapse = "\n"),
+    "",
+    paste0("Parent cluster id: ", cluster_id),
+    sep = "\n"
+  )
+}
+
 #' Tag a parent cluster based on its child tags and sample questions
 #'
 #' @param child_clusters List of child cluster metadata including tag and sample
@@ -308,7 +398,9 @@ tag_parent_cluster <- function(
     parent_examples,
     cluster_id,
     model,
-    base_url) {
+    base_url,
+    level_idx = NA_integer_,
+    max_level = NA_integer_) {
 
   child_lines <- purrr::map_chr(child_clusters, function(child) {
     tag <- rlang::`%||%`(child$tag, "untagged")
@@ -320,33 +412,11 @@ tag_parent_cluster <- function(
       paste0("  - ", samp, collapse = "\n")
     )
   })
-
-
-  prompt <- paste(
-    "You are building a hierarchical label tree for survey questions.",
-    "",
-    "Below are several CHILD CLUSTERS and the current tags for each.",
-    "Your job is to create ONE PARENT LABEL that groups all of them.",
-    "",
-    "OUTPUT FORMAT:",
-    "- Output ONE SHORT LABEL (exactly one word), lowercase, ASCII letters only.",
-    "- No punctuation, no spaces, no quotes.",
-    "- No explanation.",
-    "",
-    "REQUIREMENTS:",
-    "- The parent label must be STRICTLY MORE GENERAL than EACH child tag.",
-    "- It must still capture a clear, coherent theme shared by all child clusters.",
-    "- Do NOT output any label that appears anywhere in the provided {path: ...} hierarchies.",
-    "  (Those are lower-level labels that already exist.)",
-    "- Avoid very broad, generic words like 'survey', 'questions', 'general',",
-    "  'other', 'miscellaneous', 'unknown', 'unclear'.",
-    "- Compared to the leaf-level tags, this label should be MORE GENERAL, not more specific.",
-    "",
-    "Child clusters (with tags and example questions):",
-    paste(child_lines, collapse = "\n"),
-    "",
-    paste0("Parent cluster id: ", cluster_id),
-    sep = "\n"
+  prompt <- build_parent_tag_prompt(
+    child_lines = child_lines,
+    cluster_id = cluster_id,
+    level_idx = level_idx,
+    max_level = max_level
   )
 
   # ---- Debug: print prompt ----
@@ -386,6 +456,8 @@ tag_parent_cluster <- function(
 #' @param cluster_id Cluster identifier.
 #' @param model Ollama model to use.
 #' @param base_url Base URL for the Ollama server.
+#' @param level_idx Integer level currently being tagged.
+#' @param max_level Maximum hierarchy depth.
 #'
 #' @return A short tag label.
 #' @keywords internal
@@ -393,22 +465,15 @@ tag_one_cluster_ollama <- function(
     captions,
     cluster_id,
     model,
-    base_url
+    base_url,
+    level_idx = 1L,
+    max_level = 1L
 ) {
-  examples <- paste0("- ", captions, collapse = "\n")
-  prompt <- paste(
-    "You are labeling a cluster of survey questions.",
-    "",
-    "OUTPUT FORMAT:",
-    "- Output ONE SHORT LABEL (exactly one word), lowercase, ASCII letters only.",
-    "- No punctuation, no spaces, no quotes.",
-    "- No explanation.",
-    "",
-    "Cluster id:", cluster_id,
-    "",
-    "Example questions:",
-    examples,
-    sep = "\n"
+  prompt <- build_leaf_tag_prompt(
+    captions = captions,
+    cluster_id = cluster_id,
+    level_idx = level_idx,
+    max_level = max_level
   )
 
   raw <- tryCatch(

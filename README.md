@@ -1,139 +1,183 @@
-# Survey Data Extraction to JSON-LD R Package
+# tagger
 
-## Overview
+`tagger` is an R package for survey processing with three major capabilities:
 
-GraphDB provides helpers to:
+1. **Survey extraction and JSON-LD export** for ontology-aligned publication.
+2. **Hierarchical semantic clustering** of question captions.
+3. **Hierarchical tag generation** with Ollama (resumable runs and post-cleaning).
 
-- import survey data from CSV files and normalise survey identifiers,
-- embed and cluster question captions using local Ollama models, and
-- export survey content to JSON-LD aligned to the [Survey Ontology](https://w3id.org/survey-ontology),
-- tag survey questions with a resumable, functional pipeline.
+It includes two clustering modes:
 
+- **Standard mode**: hierarchical clustering directly on question embeddings (`run_tagger_pipeline()`).
+- **BERTopic mode**: BERTopic provides the leaf clusters, then the same bottom-up tagging logic is used (`run_bertopic_tagger_pipeline()`).
 
+---
 
-## Tagging Pipeline
+## Installation
 
-### Starting out
+### Development install
 
-The Ollama endpoint and models to use for embedding and tagging needs to be specified.
-The defaults can be overridden with the following environment variables:
-
+```r
+# install.packages("devtools")
+devtools::install()
 ```
+
+### Re-generate documentation
+
+```r
+devtools::document()
+```
+
+This should refresh all `man/*.Rd` files from roxygen comments.
+
+---
+
+## Runtime dependencies
+
+- **R >= 4.2**
+- Ollama running locally or remotely
+- Required Ollama models (typical):
+  - embedding: `nomic-embed-text`
+  - tagging: `llama3.1:8b`
+- For BERTopic mode only:
+  - `reticulate`
+  - Python packages: `bertopic`, `sentence-transformers`, `umap-learn`, `hdbscan`, `scikit-learn`
+
+---
+
+## Ollama configuration
+
+You can configure via environment variables:
+
+```sh
 export OLLAMA_BASE_URL="http://localhost:11434"
 export EMBED_MODEL="nomic-embed-text"
 export TAGGER_MODEL="llama3.1:8b"
 ```
 
-To configure the parameters for embedding and tagging use the `ollama_config()`
-function as follows:
-
-```
-conf <- ollama_config()
-# This configures the parameters to their default values or the environment variables (if set)
-
-# Alternatively override any parameters in the function call aas follows
-conf <- ollama_config(base_url = "http://localhost:11434")
-```
-
-### Functional pipeline
-
-The tagging pipeline is designed as a sequence of small, reusable functions
-that can be resumed from disk. The full pipeline is wrapped by
-`run_tagger_pipeline()`, but each step is also exposed for manual execution.
-
-Major functions and what they do:
-
-- `ollama_config()`: collect Ollama base URL and model names.
-- `load_forms()`: read a `.Rda` forms tibble from disk.
-- `unnest_questions()`: extract unique question captions.
-- `embed_multiple_questions()`: call the Ollama embedder for all captions.
-- `cluster_embeddings()` + `add_cluster_assignments()`: build hierarchical
-  clusters from embeddings.
-- `build_cluster_index()`: index clusters and parent/child relationships.
-- `tag_clusters_bottom_up()`: tag clusters, saving state after each tag.
-- `build_question_tag_matrix()`: map tags to each question across levels.
-- `clean_tag_hierarchy()` + `audit_tag_paths()`: clean tag hierarchy and flag
-  redundant/missing tags.
-
-Example end-to-end run:
+Or in R:
 
 ```r
-conf <- ollama_config()
+conf <- ollama_config(
+  base_url = "http://localhost:11434",
+  embed_model = "nomic-embed-text",
+  tagger_model = "llama3.1:8b"
+)
+```
+
+---
+
+## Standard hierarchical tagging workflow
+
+```r
+library(tagger)
+
 state <- run_tagger_pipeline(
   forms_path = "path/to/forms.Rda",
-  clusters_by_level = binary_levels(128),
+  clusters_by_level = binary_levels(128),  # e.g. 128 -> 64 -> ... -> 2
+  limit_n = Inf,
+  sample_size = 6,
   progress_path = "tagger_state.rds",
-  config = conf,
+  config = ollama_config(),
   use_llm_cleaning = FALSE
 )
 
-state$tag_matrix
-state$audit
+# Main outputs
+state$clusters     # cluster-level tags
+state$tag_matrix   # tag_level_1...tag_level_n per question
+state$cleaned      # cleanup mappings
+state$audit        # hierarchy audit flags
 ```
 
-### Embeddings
+### What happens internally
 
-Question captions are sent to the configured Ollama embedding model and the
-corresponding vector embeddings are returned.  These embeddings are then used
-for semantic hierarchical clustering.
+1. `load_forms()` loads forms data.
+2. `unnest_questions()` extracts unique captions with stable IDs.
+3. `embed_multiple_questions()` gets question embeddings from Ollama.
+4. `cluster_embeddings()` + `add_cluster_assignments()` build hierarchy.
+5. `build_cluster_index()` creates parent/child metadata.
+6. `tag_clusters_bottom_up()` labels leaf to root and checkpoints state.
+7. `build_question_tag_matrix()` creates per-question multi-level tags.
+8. `clean_tag_hierarchy()` + `audit_tag_paths()` clean and validate.
 
-The `embedding.R` file contains the methods for embedding the survey questions.
-Each question's text is sent to the Ollama embedding model as a HTTP request and
-the corresponding embedding vector gets returned.
+---
 
-As a preliminary step the R data frame (containing the survey data) needs to be un-nested
-so the question captions can be sent to the embedder.
-```
-forms_path <- "...pathTo/form.Rda"
-forms <- load_forms(forms_path)
-forms_flat <- unnest_questions(forms)
-```
+## BERTopic-driven workflow (same tag logic, different clustering)
 
-Once flattened the question captions are sent to the embedding model:
-```
-embeddings <- embed_multiple_questions(
-  forms_flat$caption,
-  model = conf$embed_model,
-  base_url = conf$base_url
+Use this when you want BERTopic to define leaf topics while preserving the same hierarchical tagging mechanics and parent-tag rollup behavior as the standard pipeline.
+
+```r
+library(tagger)
+
+forms <- load_forms("path/to/forms.Rda")
+
+# Optional safety check for Python side
+check_bertopic_environment()
+
+res <- run_bertopic_tagger_pipeline(
+  forms = forms,
+  sample_size = 6,
+  progress_path = "bertopic_state.rds",
+  topic_levels = NULL,        # auto-infer hierarchy from number of topics
+  config = ollama_config(),
+  bertopic_kwargs = list(calculate_probabilities = FALSE, verbose = TRUE)
 )
+
+res$state$clusters
+res$tag_matrix_final
 ```
 
-### Clustering
+### BERTopic mode behavior
 
-Hierarchical Clustering is an unsupervised learning method used to group similar data points into clusters based 
-on their distance or similarity. Instead of choosing the number of clusters in advance, it builds a tree-like structure 
-called a dendrogram that shows how clusters merge or split at different levels. 
-It helps identify natural groupings indata and is commonly used in pattern recognition, customer segmentation, gene analysis and image grouping.
-It builds a multilevel hierarchy of clusters by either merging smaller clusters into larger ones (agglomerative) or 
-dividing a large cluster into smaller ones (divisive). This results in a tree-like structure known as a dendrogram.
+- BERTopic assigns each question to a topic (`topic_id`).
+- `build_bertopic_hierarchy()` maps topic IDs into leaf cluster IDs.
+- Higher levels are formed by clustering topic centroids.
+- `tag_clusters_bottom_up()` is reused directly to generate tags from leaf to root.
+- Prompt instructions are level-aware (leaf/mid/top-level) to improve reasonable tag generation at each hierarchy level.
 
-## Development workflow
+---
 
-1. Install dependencies and regenerate documentation:
+## Prompting strategy used for tags
 
-   ```r
-   devtools::document()
-   ```
+Tagging prompts enforce:
 
-2. Build and check the package:
+- one-word labels
+- lowercase ASCII output
+- no punctuation/explanations
+- cluster-level scope guidance (leaf vs mid-level vs top-level)
+- parent labels must be broader than child labels
+- avoidance of generic labels and existing hierarchy-path labels
 
-   ```r
-   devtools::build()
-   ```
+This reduces noisy or overly broad labels while keeping hierarchy semantics consistent.
 
-3. Run the forms tagging demonstration once you have `forms.Rda` available:
+---
 
-   ```r
-   source("Vignettes/taggerDemo.R")
-   ```
+## Resuming interrupted runs
 
-## Question tagging with Ollama
+Both pipelines persist state to `.rds` files.
 
-For local development, install and start Ollama:
+- Re-run with the same `progress_path` to continue.
+- Existing tags are reused; only missing/`untagged` clusters are retried.
 
-```sh
-brew install ollama
-ollama serve
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text
+---
+
+## Build/check/install commands
+
+```r
+devtools::document()
+devtools::build()
+devtools::install()
 ```
+
+If you are preparing a release, also run:
+
+```r
+devtools::check()
+```
+
+---
+
+## Notes
+
+- `R/bert.R` contains `check_bertopic_environment()` only (safe helper, no side effects at package load time).
+- Example runnable scripts remain under `Vignettes/`.
