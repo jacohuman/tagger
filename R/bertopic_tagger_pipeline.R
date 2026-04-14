@@ -1,4 +1,4 @@
-#' BERTopic-driven tagging pipeline with stability, cleanup and audit
+#' BERTopic-driven tagging pipeline with shared hierarchical tagging logic
 #'
 #' @description
 #' Builds question clusters with BERTopic, then reuses the existing tagging,
@@ -9,8 +9,6 @@
 #' @param limit_n Maximum number of unique questions to include.
 #' @param sample_size Number of sample questions sent per cluster tagging call.
 #' @param progress_path Optional path to persist intermediate state.
-#' @param max_tag_rounds Maximum rounds when searching for stable tags.
-#' @param stable_streak Number of consecutive identical tags required for stability.
 #' @param topic_levels Optional integer vector for hierarchy levels.
 #'   If NULL, levels are inferred from the number of BERTopic topics.
 #' @param reviewed_groups Optional reviewed synonym-group table. If NULL,
@@ -28,8 +26,6 @@ run_bertopic_tagger_pipeline <- function(
     limit_n = Inf,
     sample_size = 6,
     progress_path = NULL,
-    max_tag_rounds = 7,
-    stable_streak = 2,
     topic_levels = NULL,
     reviewed_groups = NULL,
     min_synonym_sim = 0.88,
@@ -63,14 +59,12 @@ run_bertopic_tagger_pipeline <- function(
     clusters_by_level = hierarchy$clusters_by_level
   ), class = "tag_state")
 
-  state <- tag_clusters_bottom_up_stable(
+  state <- tag_clusters_bottom_up(
     state = state,
     sample_size = sample_size,
+    progress_path = if (is.null(progress_path)) tempfile(fileext = '.rds') else progress_path,
     model = config$tagger_model,
-    base_url = config$base_url,
-    max_rounds = max_tag_rounds,
-    stable_streak = stable_streak,
-    progress_path = progress_path
+    base_url = config$base_url
   )
 
   tag_matrix <- build_question_tag_matrix(state$assignments, state$clusters)
@@ -258,166 +252,4 @@ infer_topic_levels <- function(n_leaf) {
     if (cur == 2L) break
   }
   unique(as.integer(ks))
-}
-
-#' Repeatedly tag a cluster until label stabilises
-#'
-#' @param captions Candidate captions for the cluster.
-#' @param cluster_id Cluster identifier.
-#' @param model Ollama model name.
-#' @param base_url Ollama base URL.
-#' @param sample_size Per-round sample size.
-#' @param max_rounds Maximum rounds.
-#' @param stable_streak Required consecutive same-tag streak.
-#'
-#' @return List with tag, rounds, and history.
-#' @export
-tag_cluster_until_stable <- function(
-    captions,
-    cluster_id,
-    model,
-    base_url,
-    sample_size = 6,
-    max_rounds = 7,
-    stable_streak = 2
-) {
-  captions <- unique(stats::na.omit(as.character(captions)))
-  if (length(captions) == 0) {
-    return(list(tag = "untagged", rounds = 0L, history = character(0)))
-  }
-
-  history <- character(0)
-  streak <- 0L
-  prev <- NA_character_
-
-  for (round_idx in seq_len(max_rounds)) {
-    samp <- if (length(captions) > sample_size) sample(captions, sample_size) else captions
-
-    tag_i <- tag_one_cluster_ollama(
-      captions = samp,
-      cluster_id = cluster_id,
-      model = model,
-      base_url = base_url
-    )
-
-    history <- c(history, tag_i)
-
-    if (!is.na(prev) && identical(tag_i, prev)) {
-      streak <- streak + 1L
-    } else {
-      streak <- 1L
-      prev <- tag_i
-    }
-
-    if (streak >= stable_streak && !identical(tag_i, "untagged")) {
-      return(list(tag = tag_i, rounds = round_idx, history = history))
-    }
-  }
-
-  stable_tag <- names(sort(table(history), decreasing = TRUE))[1]
-  if (length(stable_tag) == 0 || is.na(stable_tag) || !nzchar(stable_tag)) {
-    stable_tag <- "untagged"
-  }
-
-  list(tag = stable_tag, rounds = max_rounds, history = history)
-}
-
-#' Bottom-up cluster tagging with sampling-based stability
-#'
-#' @param state A tag_state list with questions, assignments, clusters.
-#' @param sample_size Number of examples per tagging request.
-#' @param model Ollama model.
-#' @param base_url Ollama base URL.
-#' @param max_rounds Max rounds for stability loop.
-#' @param stable_streak Consecutive-match threshold.
-#' @param progress_path Optional RDS path to persist progress.
-#'
-#' @return Updated `state`.
-#' @export
-tag_clusters_bottom_up_stable <- function(
-    state,
-    sample_size,
-    model,
-    base_url,
-    max_rounds = 7,
-    stable_streak = 2,
-    progress_path = NULL
-) {
-  clusters <- state$clusters
-  questions <- state$questions
-  assignments <- state$assignments
-
-  max_level <- max(clusters$level)
-
-  for (level_idx in seq_len(max_level)) {
-    level_rows <- which(clusters$level == level_idx)
-
-    for (row_idx in level_rows) {
-      existing_tag <- clusters$tag[[row_idx]]
-      if (!is.na(existing_tag) && nzchar(existing_tag) && existing_tag != "untagged") {
-        next
-      }
-
-      q_ids <- clusters$question_ids[[row_idx]]
-      q_caps <- unique(stats::na.omit(questions$caption[match(q_ids, questions$id)]))
-
-      if (level_idx == 1L) {
-        leaf <- tag_cluster_until_stable(
-          captions = q_caps,
-          cluster_id = clusters$cluster_id[[row_idx]],
-          model = model,
-          base_url = base_url,
-          sample_size = sample_size,
-          max_rounds = max_rounds,
-          stable_streak = stable_streak
-        )
-        tag <- leaf$tag
-      } else {
-        child_rows <- which(
-          clusters$parent_cluster == clusters$cluster_id[[row_idx]] &
-            clusters$level == (level_idx - 1L)
-        )
-
-        child_details <- purrr::map(child_rows, function(i) {
-          child_q <- unique(stats::na.omit(clusters$question_ids[[i]]))
-          sampled <- if (length(child_q) > sample_size) sample(child_q, sample_size) else child_q
-
-          samples <- purrr::map_chr(
-            sampled,
-            ~ format_question_with_path(
-              q_id = .x,
-              questions = questions,
-              assignments = assignments,
-              clusters = clusters,
-              upto_level = level_idx - 1L
-            )
-          )
-
-          list(
-            cluster_id = clusters$cluster_id[[i]],
-            tag = clusters$tag[[i]],
-            samples = samples
-          )
-        })
-
-        tag <- tag_parent_cluster(
-          child_clusters = child_details,
-          parent_examples = if (length(q_caps) > sample_size) sample(q_caps, sample_size) else q_caps,
-          cluster_id = clusters$cluster_id[[row_idx]],
-          model = model,
-          base_url = base_url
-        )
-      }
-
-      clusters$tag[[row_idx]] <- ifelse(is.na(tag) || !nzchar(tag), "untagged", tag)
-      state$clusters <- clusters
-
-      if (!is.null(progress_path)) {
-        saveRDS(state, progress_path)
-      }
-    }
-  }
-
-  state$clusters <- clusters
-  state
 }
