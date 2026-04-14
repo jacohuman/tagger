@@ -42,6 +42,8 @@ check_bertopic_environment <- function(verbose = interactive()) {
 #' @param envname Name of the Python environment to create/use.
 #' @param method Python environment backend. One of `"auto"`, `"virtualenv"`,
 #'   or `"conda"`.
+#' @param python_version Optional Python version passed through to
+#'   [reticulate::install_miniconda()].
 #' @param pip Logical. Forwarded to [reticulate::py_install()].
 #'
 #' @return Invisibly returns [check_bertopic_environment()] output after install.
@@ -49,6 +51,7 @@ check_bertopic_environment <- function(verbose = interactive()) {
 install_bertopic_environment <- function(
     envname = "r-tagger-bertopic",
     method = c("auto", "virtualenv", "conda"),
+    python_version = NULL,
     pip = TRUE
 ) {
   if (!requireNamespace("reticulate", quietly = TRUE)) {
@@ -65,8 +68,8 @@ install_bertopic_environment <- function(
   )
 
   if (method %in% c("auto", "conda")) {
-    if (!dir.exists(reticulate::miniconda_path())) {
-      reticulate::install_miniconda()
+    if (!reticulate::miniconda_exists()) {
+      reticulate::install_miniconda(python_version = python_version)
     }
   }
 
