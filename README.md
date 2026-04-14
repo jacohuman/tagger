@@ -114,17 +114,16 @@ forms <- load_forms("path/to/forms.Rda")
 # Optional safety check for Python side
 check_bertopic_environment()
 
-res <- run_bertopic_tagger_pipeline(
+state <- run_bertopic_tagger_pipeline(
   forms = forms,
   sample_size = 6,
   progress_path = "bertopic_state.rds",
   topic_levels = NULL,        # auto-infer hierarchy from number of topics
   config = ollama_config(),
   bertopic_kwargs = list(calculate_probabilities = FALSE, verbose = TRUE)
-)
+)$state
 
-res$state$clusters
-res$tag_matrix_final
+state$clusters
 ```
 
 ### BERTopic mode behavior
