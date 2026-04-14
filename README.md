@@ -114,11 +114,8 @@ forms <- load_forms("path/to/forms.Rda")
 # Optional safety check for Python side
 check_bertopic_environment()
 
-# If any entries are FALSE, install everything in one step
-install_bertopic_environment()
-
-# Re-check until all entries are TRUE
-check_bertopic_environment()
+# Ensure required Python packages are declared for the active reticulate Python
+ensure_bertopic_python()
 
 state <- run_bertopic_tagger_pipeline(
   forms = forms,
@@ -184,5 +181,5 @@ devtools::check()
 
 ## Notes
 
-- `R/bert.R` contains `check_bertopic_environment()` only (safe helper, no side effects at package load time).
+- `R/bert.R` contains BERTopic Python helpers (`check_bertopic_environment()`, `ensure_bertopic_python()`, and optional `install_bertopic_environment()`).
 - Example runnable scripts remain under `Vignettes/`.

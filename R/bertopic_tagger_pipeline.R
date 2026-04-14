@@ -151,9 +151,7 @@ run_bertopic_tagger_pipeline <- function(
 #' @return List with topic_ids and Python objects used for tracing.
 #' @export
 fit_bertopic_topics <- function(texts, embeddings = NULL, bertopic_kwargs = list()) {
-  if (!requireNamespace("reticulate", quietly = TRUE)) {
-    stop("Package 'reticulate' is required for BERTopic.", call. = FALSE)
-  }
+  ensure_bertopic_python()
 
   texts <- as.character(texts)
   texts <- texts[!is.na(texts)]

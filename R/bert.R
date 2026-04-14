@@ -33,6 +33,30 @@ check_bertopic_environment <- function(verbose = interactive()) {
   status
 }
 
+#' Ensure BERTopic Python packages are available in current reticulate Python
+#'
+#' @description
+#' Declares the BERTopic dependency set via [reticulate::py_require()] so
+#' `reticulate` can resolve modules in the active Python environment/session.
+#'
+#' @return Invisibly returns `NULL`.
+#' @export
+ensure_bertopic_python <- function() {
+  if (!requireNamespace("reticulate", quietly = TRUE)) {
+    stop("Package 'reticulate' is required for BERTopic integration.", call. = FALSE)
+  }
+
+  reticulate::py_require(c(
+    "bertopic",
+    "sentence-transformers",
+    "umap-learn",
+    "hdbscan",
+    "scikit-learn"
+  ))
+
+  invisible(NULL)
+}
+
 #' Install Python dependencies required for BERTopic mode
 #'
 #' @description
