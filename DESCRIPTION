@@ -25,3 +25,4 @@ Suggests:
     devtools,
     reticulate,
     testthat
+Config/testthat/edition: 3
