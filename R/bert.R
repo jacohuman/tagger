@@ -38,6 +38,8 @@ check_bertopic_environment <- function(verbose = interactive()) {
 #' @description
 #' Declares the BERTopic dependency set via [reticulate::py_require()] so
 #' `reticulate` can resolve modules in the active Python environment/session.
+#' Also applies conservative thread/runtime defaults to reduce OpenMP-related
+#' instability in long R + Python mixed sessions.
 #'
 #' @return Invisibly returns `NULL`.
 #' @export
@@ -45,6 +47,8 @@ ensure_bertopic_python <- function() {
   if (!requireNamespace("reticulate", quietly = TRUE)) {
     stop("Package 'reticulate' is required for BERTopic integration.", call. = FALSE)
   }
+
+  stabilize_bertopic_runtime()
 
   reticulate::py_require(c(
     "bertopic",
@@ -55,6 +59,42 @@ ensure_bertopic_python <- function() {
   ))
 
   invisible(NULL)
+}
+
+#' Apply conservative runtime defaults for BERTopic/UMAP/HDBSCAN execution
+#'
+#' @description
+#' BERTopic dimensionality reduction and clustering run in native Python
+#' libraries (NumPy/BLAS/numba/OpenMP). In some mixed R+Python environments,
+#' aggressive threading or runtime mismatches can terminate the host R session.
+#' This helper sets safe defaults when the variables are not already defined.
+#'
+#' @return Invisibly returns the effective values applied or already present.
+#' @export
+stabilize_bertopic_runtime <- function() {
+  defaults <- c(
+    OMP_NUM_THREADS = "1",
+    MKL_NUM_THREADS = "1",
+    OPENBLAS_NUM_THREADS = "1",
+    NUMEXPR_NUM_THREADS = "1",
+    VECLIB_MAXIMUM_THREADS = "1",
+    BLIS_NUM_THREADS = "1",
+    NUMBA_NUM_THREADS = "1",
+    TOKENIZERS_PARALLELISM = "false"
+  )
+
+  out <- stats::setNames(as.list(rep(NA_character_, length(defaults))), names(defaults))
+  for (nm in names(defaults)) {
+    cur <- Sys.getenv(nm, unset = "")
+    if (!nzchar(cur)) {
+      Sys.setenv(structure(defaults[[nm]], names = nm))
+      out[[nm]] <- defaults[[nm]]
+    } else {
+      out[[nm]] <- cur
+    }
+  }
+
+  invisible(out)
 }
 
 #' Install Python dependencies required for BERTopic mode
