@@ -17,6 +17,7 @@
 #' @param auto_synonym_sim "very_high" confidence threshold.
 #' @param config Output of [ollama_config()].
 #' @param bertopic_kwargs Optional named list passed to `BERTopic(...)`.
+#'   Defaults include `low_memory = TRUE` for better stability on large corpora.
 #'
 #' @return Named list with BERTopic outputs, tagging state, cleanup artifacts,
 #'   synonym-review candidates, and reordered tag matrix.
@@ -147,6 +148,7 @@ run_bertopic_tagger_pipeline <- function(
 #' @param embeddings Optional numeric matrix of precomputed embeddings.
 #'   When supplied, BERTopic skips its own embedding model.
 #' @param bertopic_kwargs Named list forwarded to BERTopic constructor.
+#'   Defaults include `low_memory = TRUE`; values in this list override defaults.
 #'
 #' @return List with topic_ids and Python objects used for tracing.
 #' @export
@@ -162,11 +164,19 @@ fit_bertopic_topics <- function(texts, embeddings = NULL, bertopic_kwargs = list
 
   default_kwargs <- list(
     calculate_probabilities = FALSE,
-    verbose = TRUE
+    verbose = TRUE,
+    low_memory = TRUE
   )
   kwargs <- utils::modifyList(default_kwargs, bertopic_kwargs)
 
   model <- do.call(bertopic_mod$BERTopic, kwargs)
+
+  if (!is.null(embeddings)) {
+    np <- reticulate::import("numpy", delay_load = TRUE)
+    embeddings <- np$ascontiguousarray(reticulate::r_to_py(embeddings), dtype = np$float32)
+  }
+
+  gc(verbose = FALSE)
 
   fit <- if (is.null(embeddings)) {
     model$fit_transform(texts)
