@@ -1,0 +1,3 @@
+load("/Users/jacohuman/Desktop/testTagger/forms_tagger_progress.rds")
+load("/Users/jacohuman/Desktop/testTagger/topic_model_extras.rds")
+load("/Users/jacohuman/Desktop/testTagger/topic_model_helper_extras.rds")
